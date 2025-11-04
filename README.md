@@ -5,10 +5,10 @@ Google DriveのドキュメントにRAG（Retrieval-Augmented Generation）機�
 ## 特徴
 
 - **RAGベースの質問応答**: Google Drive内のドキュメントに対して自然言語で質問できます
-- **多様なファイル形式に対応**: PDF、DOCX、Googleドキュメント、スプレッドシート、テキストファイル
+- **多様なファイル形式に対応**: PDF、DOCX、Googleドキュメント、テキストファイル
 - **ベクトル検索**: FAISSを使用した高速な類似度検索
 - **MCPサーバー実装**: 標準的なMCPプロトコルに準拠
-- **簡単な統合**: LangChainとOpenAI GPTを活用した柔軟なアーキテクチャ
+- **簡単な統合**: LangChainとOpenAI APIを活用した柔軟なアーキテクチャ
 
 ## 主要機能
 
