@@ -1,0 +1,66 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.envrc
+
+# Python version management
+.python-version
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+# Test & coverage reports
+.coverage
+.coverage.*
+coverage.xml
+pytestdebug.log
+
+# Logs & temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# IDE settings
+.idea/
+.vscode/
+
+# OS artifacts
+.DS_Store
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.pfx
+service_account.json
+credentials.json
+token.json
+token.pickle
+google-credentials.json
+
+# Local database & cache files
+*.db
+*.sqlite3
