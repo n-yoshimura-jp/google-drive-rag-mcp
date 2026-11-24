@@ -1,137 +1,85 @@
 # Google Drive RAG MCP Server
 
-Google DriveのドキュメントにRAG（Retrieval-Augmented Generation）機能を提供するMCP（Model Context Protocol）サーバーです。Google Drive内のドキュメント（PDF、DOCX、Googleドキュメントなど）を検索し、AIによる質問応答を実現します。
+Word / Excel / PowerPoint / PDF / テキストファイルを Markdown に変換して Google Drive にアップロードし、その内容について MCP クライアント（Claude Code / Claude Desktop など）から質問できるようにする RAG（Retrieval-Augmented Generation）システムです。
 
-## 特徴
+## 構成
 
-- **RAGベースの質問応答**: Google Drive内のドキュメントに対して自然言語で質問できます
-- **多様なファイル形式に対応**: PDF、DOCX、Googleドキュメント、テキストファイル
-- **ベクトル検索**: FAISSを使用した高速な類似度検索
-- **MCPサーバー実装**: 標準的なMCPプロトコルに準拠
-- **簡単な統合**: LangChainとOpenAI APIを活用した柔軟なアーキテクチャ
+処理は 3 つのプログラムに分かれています。
 
-## 主要機能
+| ファイル | 種類 | 役割 |
+|---|---|---|
+| `src/convert_to_markdown.py` | CLI | ローカルフォルダのファイルを Markdown (`.md`) に変換する |
+| `src/upload_to_drive.py` | CLI | `.md` ファイルを Google Drive のフォルダにアップロードする（同名ファイルは更新） |
+| `src/google_drive_rag_mcp_server.py` | MCP サーバー | Drive の `.md` ファイルを検索し、質問に回答する（ツール: `ask_question`） |
 
-### 1. ドキュメント検索と質問応答 (`ask_question`)
-Google Driveフォルダ内のドキュメントを検索し、質問に対する回答を生成します。
-
-**使用例:**
-- 「料金プランについて教えて」
-- 「エンタープライズプランの機能は？」
-- 「サービスの利用規約を教えて」
-
-### 2. ファイル一覧表示 (`list_files`)
-指定したフォルダ内のファイル一覧を取得します。
-
-### 3. ファイルアップロード (`upload_file`)
-ローカルファイルをGoogle Driveにアップロードします。
-
-## 主なライブラリ
-
-- **Python 3.13+**
-- **LangChain**: RAGパイプラインの構築
-- **OpenAI GPT**: 自然言語処理と回答生成
-- **FAISS**: ベクトル類似度検索
-- **Google Drive API**: ドキュメントの取得と管理
-- **FastMCP**: MCPサーバーの実装
-- **PyPDF & python-docx**: ファイル形式の解析
-
-## インストール
-
-### 前提条件
-
-- Python 3.13以上
-- OpenAI APIキー
-- Google Cloud Projectとサービスアカウント
-- Google Drive APIの有効化
-
-### セットアップ
-
-1. リポジトリをクローン:
-```bash
-git clone <repository-url>
-cd google-drive-rag
 ```
-
-2. 依存関係をインストール:
-```bash
-pip install -r requirements.txt
+ローカルの資料 ──(convert_to_markdown.py)──> .md ──(upload_to_drive.py)──> Google Drive
+                                                                              │
+                                    MCP クライアント ──(ask_question)──> google_drive_rag_mcp_server.py
 ```
-
-または`uv`を使用:
-```bash
-uv sync
-```
-
-3. 環境変数を設定（`.env`ファイルを作成）:
-```env
-OPENAI_API_KEY=your-openai-api-key
-GOOGLE_DRIVE_FOLDER_ID=your-folder-id
-GOOGLE_DRIVE_CREDENTIALS_PATH=path/to/credentials.json
-```
-
-### Google Drive APIの設定
-
-1. [Google Cloud Console](https://console.cloud.google.com/)でプロジェクトを作成
-2. Google Drive APIを有効化
-3. OAuth 2.0クライアントIDを作成（デスクトップアプリケーション）
-4. `credentials.json`をダウンロードし、プロジェクトディレクトリに配置
-5. 環境変数`GOOGLE_DRIVE_CREDENTIALS_PATH`にパスを設定
-
-## 使用方法
-
-### MCPサーバーとして起動
-
-```bash
-python src/google_drive_rag_mcp_server.py
-```
-
-### ツールの使用例
-
-#### 質問応答
-```python
-# MCPクライアントから
-ask_question("料金プランについて教えてください")
-```
-
-#### ファイル一覧
-```python
-list_files(max_results=10)
-```
-
-#### ファイルアップロード
-```python
-upload_file("/path/to/document.pdf")
-```
-
-## 仕組み
-
-1. **初期化フェーズ**:
-   - 指定されたGoogle Driveフォルダからドキュメントをダウンロード
-   - テキストを抽出し、チャンク分割（1000文字、200文字オーバーラップ）
-   - OpenAI Embeddingsでベクトル化
-   - FAISSインデックスを構築
-
-2. **検索フェーズ**:
-   - ユーザーの質問をベクトル化
-   - FAISSで関連ドキュメントを検索
-   - 上位3件のドキュメントを取得
-
-3. **生成フェーズ**:
-   - 検索結果をコンテキストとして使用
-   - OpenAI GPTで回答を生成
-   - 参照元情報と共に返答
 
 ## 対応ファイル形式
 
-- Googleドキュメント (`.gdoc`)
-- PDFファイル (`.pdf`)
-- Wordファイル (`.docx`)
-- テキストファイル (`.txt`)
+Word (`.docx`)、Excel (`.xlsx`、全シート)、PowerPoint (`.pptx`)、PDF (`.pdf`、文字情報のあるもの)、テキスト (`.txt`)
+
+## 主なライブラリ
+
+- **markitdown**: 各種ファイルの Markdown 変換
+- **Google Drive API**: ファイルのアップロードと読み込み
+- **LangChain**: RAG パイプライン（チャンク分割、ベクトル検索）
+- **OpenAI Embeddings** (`text-embedding-3-small`): ドキュメントと質問のベクトル化
+- **Claude Haiku 5.5**: 回答生成
+- **MCP Python SDK**: MCP サーバーの実装
+
+## セットアップ
+
+詳しい手順は [SETUP_GUIDE.txt](SETUP_GUIDE.txt) を参照してください。
+
+1. 依存関係をインストール:
+   ```bash
+   uv sync
+   ```
+2. Google Cloud で Drive API を有効化し、OAuth クライアント ID（デスクトップアプリ）の `credentials.json` を用意
+3. `.env` ファイルを作成:
+   ```env
+   OPENAI_API_KEY=your-openai-api-key
+   ANTHROPIC_API_KEY=your-anthropic-api-key
+   GOOGLE_DRIVE_FOLDER_ID=your-folder-id
+   GOOGLE_DRIVE_CREDENTIALS_PATH=/absolute/path/to/credentials.json
+   ```
+
+## 使い方
+
+フォルダはスクリプト先頭の変数で指定します（既定値: 変換元 `data/`、Markdown の保存先 `markdown/`）。アップロード先の Drive フォルダ ID は `.env` の `GOOGLE_DRIVE_FOLDER_ID` から読み込みます。
+
+1. `data/` の資料を Markdown に変換し、`markdown/` に保存:
+   ```bash
+   uv run python src/convert_to_markdown.py
+   ```
+2. `markdown/` の `.md` を Google Drive にアップロード（ブラウザで Google 認証）:
+   ```bash
+   uv run python src/upload_to_drive.py
+   ```
+3. MCP サーバーを MCP クライアントに登録して、質問する:
+   ```bash
+   claude mcp add google-drive-rag -- uv run --directory /path/to/google-drive-rag python src/google_drive_rag_mcp_server.py
+   ```
+   例: 「ビジネスプランの月額は？」
+
+## 仕組み（`ask_question`）
+
+1. 初回の質問時に、Drive フォルダ直下の `.md` ファイルを読み込む
+2. Markdown の見出し・段落を区切りにしてチャンク分割（1000 文字、200 文字オーバーラップ）
+3. OpenAI Embeddings でベクトル化し、メモリ上のベクトルストアに保存
+4. 質問に近いチャンクを 4 件検索し、Claude Haiku 5.5 で回答を生成
+5. 回答と参照元（ファイル名と抜粋）を返す
+
+インデックスはメモリ上にのみ保持されます。Drive の資料を更新したら、MCP サーバーを再起動してください。
 
 ## 参考リンク
 
+- [markitdown](https://github.com/microsoft/markitdown)
 - [LangChain](https://github.com/langchain-ai/langchain)
-- [FastMCP](https://github.com/jlowin/fastmcp)
+- [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [OpenAI](https://openai.com/)
-- [FAISS](https://github.com/facebookresearch/faiss)
+- [Claude API](https://platform.claude.com/docs)

@@ -1,0 +1,390 @@
+================================================================================
+ Google Drive RAG MCP Server 事前準備手順
+================================================================================
+
+この手順書は、次の 3 つのプログラムを動かすために必要な準備を、
+上から順に実施すればよいように並べたものです。
+
+  src/convert_to_markdown.py         資料を Markdown に変換する（CLI）
+  src/upload_to_drive.py             Markdown を Google Drive にアップロードする（CLI）
+  src/google_drive_rag_mcp_server.py Drive の Markdown を検索して質問に回答する（MCP サーバー）
+
+全体の流れ:
+  STEP 0  必要なものの確認
+  STEP 1  Google Cloud プロジェクトの作成
+  STEP 2  Google Drive API の有効化
+  STEP 3  OAuth 同意画面（Google Auth Platform）の設定
+  STEP 4  OAuth クライアント ID の作成と credentials.json のダウンロード
+  STEP 5  Google Drive に RAG 対象フォルダを用意し、フォルダ ID を控える
+  STEP 6  OpenAI / Anthropic / Gemini API キーの取得
+  STEP 7  ローカル環境のセットアップ（uv / 依存パッケージ）
+  STEP 8  .env ファイルの作成
+  STEP 9  資料を Markdown に変換して Drive にアップロード
+  STEP 10 MCP クライアントへの登録（Claude Code / Claude Desktop）
+  STEP 11 動作確認
+  付録    トラブルシューティング / セキュリティ上の注意
+
+
+--------------------------------------------------------------------------------
+STEP 0  必要なものの確認
+--------------------------------------------------------------------------------
+[ ] Google アカウント（個人の Gmail、または Google Workspace アカウント）
+[ ] OpenAI のアカウント（Embedding 用。支払い方法の登録またはクレジットが必要）
+[ ] Anthropic のアカウント（回答生成用。クレジットの購入が必要）
+[ ] （Gemini API を使う場合のみ）Google AI Studio を使える Google アカウント
+[ ] Python 3.11.5 以上
+[ ] uv（Python のパッケージ管理ツール）
+      確認: ターミナルで  uv --version
+      未インストールなら（macOS）:  brew install uv
+[ ] Web ブラウザ（Google 認証で使用）
+
+※ Google Drive API の利用自体は無料です。料金がかかるのは OpenAI API（Embedding）と
+  Anthropic API（Claude Haiku 5.5 による回答生成）です。
+
+
+--------------------------------------------------------------------------------
+STEP 1  Google Cloud プロジェクトの作成
+--------------------------------------------------------------------------------
+1. https://console.cloud.google.com/ を開き、使用する Google アカウントでログインする。
+   （初めての場合は利用規約への同意を求められるので同意する）
+2. 画面上部のプロジェクト選択プルダウンをクリック →「新しいプロジェクト」。
+3. プロジェクト名を入力する（例: google-drive-rag）。
+   組織や場所は、個人アカウントなら「組織なし」のままでよい。
+4. 「作成」をクリックする。
+5. 作成後、画面上部のプロジェクト選択で、今作ったプロジェクトが選ばれていることを確認する。
+   ※ 以降の STEP 2〜4 はすべてこのプロジェクトを選んだ状態で行うこと。
+
+
+--------------------------------------------------------------------------------
+STEP 2  Google Drive API の有効化
+--------------------------------------------------------------------------------
+1. 左上のメニュー（≡）→「API とサービス」→「ライブラリ」を開く。
+2. 検索欄に「Google Drive API」と入力して選択する。
+3. 「有効にする」をクリックする。
+4. 「API とサービス」→「有効な API とサービス」に Google Drive API が
+   表示されていれば完了。
+
+※ Google Docs API や Google Sheets API は不要です。
+
+
+--------------------------------------------------------------------------------
+STEP 3  OAuth 同意画面（Google Auth Platform）の設定
+--------------------------------------------------------------------------------
+このサーバーは「デスクトップアプリ」として、あなた自身の Google アカウントで
+Drive にアクセスします（サービスアカウントは使いません）。
+
+1. 左上のメニュー（≡）→「Google Auth Platform」→「ブランディング（Branding）」を開く。
+   ※ メニューに見つからない場合は、次のどれかで開く（STEP 1 のプロジェクトを選んだ状態で）。
+     - 直接開く: https://console.cloud.google.com/auth/branding
+     - 画面上部の検索欄に「Google Auth Platform」または「OAuth 同意画面」と入力して選ぶ
+     - メニュー（≡）→「API とサービス」→「OAuth 同意画面」（Google Auth Platform に移動する）
+2. 「Google Auth Platform はまだ構成されていません」と表示されたら「開始（Get Started）」をクリック。
+3. [アプリ情報]
+     - アプリ名: 任意（例: Google Drive RAG）
+     - ユーザーサポートメール: 自分のメールアドレスを選択
+     →「次へ」
+4. [対象（Audience）]
+     - 個人の Gmail アカウントの場合 :「外部（External）」を選択
+     - Google Workspace の組織アカウントで、組織内だけで使う場合 :「内部（Internal）」を選択
+     →「次へ」
+5. [連絡先情報]
+     - 通知を受け取るメールアドレスを入力 →「次へ」
+6. [終了]
+     - Google API サービスのユーザーデータに関するポリシーを確認し、同意にチェック
+     →「続行」→「作成」
+7. 【「外部」を選んだ場合のみ・必須】テストユーザーの追加
+     - 「Google Auth Platform」→「対象（Audience）」を開く。
+     - 公開ステータスが「テスト中（Testing）」になっていることを確認する。
+     - 「テストユーザー」の「+ Add users」で、Drive にアクセスする自分の Google アカウントの
+       メールアドレスを追加して保存する。
+     ※ ここを忘れると、認証時に「アクセスをブロック: ... はテスト中です」というエラーになります。
+8. スコープ（データアクセス）の追加は不要です。プログラムが実行時に次のスコープを要求します。
+     - upload_to_drive.py:            https://www.googleapis.com/auth/drive（Drive の読み書き）
+       ※ アップロード先にある同名ファイルを探して更新するために必要です。
+     - google_drive_rag_mcp_server.py: https://www.googleapis.com/auth/drive.readonly（読み取りのみ）
+
+
+--------------------------------------------------------------------------------
+STEP 4  OAuth クライアント ID の作成と credentials.json のダウンロード
+--------------------------------------------------------------------------------
+1. 左上のメニュー（≡）→「Google Auth Platform」→「クライアント（Clients）」を開く。
+   ※ メニューに見つからない場合は https://console.cloud.google.com/auth/clients を開く。
+2. 「クライアントを作成（Create Client）」をクリック。
+3. アプリケーションの種類:「デスクトップ アプリ（Desktop app）」を選択。
+   ※「ウェブ アプリケーション」を選ぶと動きません。必ずデスクトップアプリにすること。
+4. 名前: 任意（例: google-drive-rag-desktop）
+5. （表示される場合）「Use this client for an AI-powered agent」は任意です。
+   作成後に変更できないため、迷ったらチェックなしで構いません。
+6. 「作成」をクリック。
+7. 作成されたクライアントの JSON をダウンロードする
+   （作成直後のダイアログ、またはクライアント一覧のダウンロードアイコンから）。
+8. ダウンロードしたファイルを credentials.json という名前に変更し、
+   プロジェクトフォルダ（例: /Users/<ユーザー名>/python_projects/google-drive-rag/）に置く。
+   ※ .gitignore に credentials.json は登録済みなので、Git にはコミットされません。
+   ※ このファイルは秘密情報です。他人に渡したり、チャットに貼り付けたりしないこと。
+
+
+--------------------------------------------------------------------------------
+STEP 5  Google Drive に RAG 対象フォルダを用意し、フォルダ ID を控える
+--------------------------------------------------------------------------------
+1. https://drive.google.com/ を、STEP 3-7 でテストユーザーに追加したアカウントで開く。
+2. 新しいフォルダを作成する（例: RAG用ドキュメント）。
+   ※ 他人のフォルダを使う場合は、そのアカウントに閲覧権限以上が共有されている必要があります。
+3. フォルダは空のままでよい（STEP 9 で Markdown ファイルをアップロードする）。
+4. フォルダを開いた状態でブラウザのアドレスバーの URL を確認する。
+     https://drive.google.com/drive/folders/XXXXXXXXXXXXXXXXXXXXXXXXX
+                                            └──── この部分がフォルダ ID ────┘
+   末尾に ?usp=... などが付いている場合、「?」以降は含めないこと。
+5. フォルダ ID を控えておく（STEP 8 で使用）。
+
+
+--------------------------------------------------------------------------------
+STEP 6  OpenAI / Anthropic / Gemini API キーの取得
+--------------------------------------------------------------------------------
+■ OpenAI（Embedding: text-embedding-3-small）
+1. https://platform.openai.com/ にログインする。
+2. 「Settings」→「Billing」で支払い方法を登録する、またはクレジットを購入する。
+   ※ 残高がないと API 呼び出し時に 429 (insufficient_quota) エラーになります。
+3. 「API keys」→「Create new secret key」でキーを作成する。
+4. 表示されたキー（sk-... で始まる文字列）をコピーする。
+   ※ キーは作成時にしか表示されません。安全な場所に控えること。
+5. このサーバーが使うモデル（text-embedding-3-small）が、
+   そのプロジェクトで利用可能になっていることを確認する
+   （プロジェクトの「Limits」でモデルを制限している場合のみ要確認）。
+
+■ Anthropic（回答生成: claude-haiku-5-5）
+1. https://platform.claude.com/ にログインする。
+2. 「Billing」でクレジットを購入する。
+3. 「API keys」→「Create Key」でキーを作成する。
+4. 表示されたキー（sk-ant-... で始まる文字列）をコピーする。
+   ※ キーは作成時にしか表示されません。安全な場所に控えること。
+
+■ Google Gemini（Gemini API を使う場合のみ）
+  Gemini API は API キーだけで認証します。STEP 2〜4 のような API の有効化、
+  OAuth 同意画面、credentials.json は不要です。
+  参考: https://ai.google.dev/gemini-api/docs/api-key
+
+  [Google Cloud プロジェクトの作成]
+  1. https://console.cloud.google.com/ を開き、STEP 1 と同じ手順で新しいプロジェクトを作成する
+     （例: gemini-rag）。
+     ※ STEP 1 のプロジェクト（google-drive-rag）を使うこともできますが、
+       料金や権限を分けて管理しやすいので、別プロジェクトにするのがおすすめです。
+  2. Generative Language API（Gemini API）を手動で有効にする必要はありません。
+     下の「API キーの作成」のときに自動で有効になります。
+
+  [Google AI Studio にプロジェクトをインポート]
+  ※ すでに Google Cloud を使っているアカウントでは、AI Studio にデフォルトの
+    プロジェクトが自動で作られないため、この作業が必要です。
+  3. https://aistudio.google.com/ を、上と同じ Google アカウントで開く。
+     （初めての場合は利用規約への同意を求められるので同意する）
+  4. 「Dashboard」→「Projects」→「Import projects」をクリックする。
+  5. 1 で作ったプロジェクトを選び、「Import」をクリックする。
+     Projects の一覧にプロジェクトが表示されれば OK。
+
+  [API キーの作成]
+  6. AI Studio の「API Keys」ページを開く。
+  7. 「Create API key」をクリックし、5 でインポートしたプロジェクトを選んで作成する。
+     ※「You do not have permission to create a key in this project」と表示されて
+       ボタンが押せない場合は、そのプロジェクトでの権限が足りません
+       （オーナーや編集者のロールが必要）。自分で作った個人プロジェクトなら通常は問題ありません。
+  8. キー一覧に「Unrestricted」ラベルが付いている場合は、
+     「Add restrictions」→「Restrict to Gemini API only」→「Restrict key」で
+     Gemini API 専用に制限する（推奨）。
+  9. 作成されたキーをコピーし、安全な場所に控える（STEP 8 で使用）。
+
+  [料金]
+  - 課金設定をしなければ無料枠の範囲で使えます。
+  - 有料枠を使う場合は AI Studio から課金を設定し、
+    Google Cloud コンソールで予算アラート（Billing alerts）を設定しておくと安心です。
+  ※ AI Studio のメニュー名は英語表記で記載しています。画面の変更が多いため、
+    名前が異なる場合は「Projects」「API Keys」に相当するページを探してください。
+
+
+--------------------------------------------------------------------------------
+STEP 7  ローカル環境のセットアップ
+--------------------------------------------------------------------------------
+1. ターミナルでプロジェクトフォルダに移動する。
+     cd /Users/<ユーザー名>/python_projects/google-drive-rag
+2. 依存パッケージをインストールする。
+     uv sync
+   （.venv フォルダが作成され、pyproject.toml / uv.lock の内容がインストールされる）
+3. インストールの確認（エラーが出なければ OK）。
+     uv run python -c "import mcp, langchain_openai, langchain_anthropic, googleapiclient; print('ok')"
+
+
+--------------------------------------------------------------------------------
+STEP 8  .env ファイルの作成
+--------------------------------------------------------------------------------
+1. プロジェクトフォルダ直下に .env という名前のファイルを作成し、以下を記入する。
+
+     OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+     ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxxxxx
+     GOOGLE_DRIVE_FOLDER_ID=STEP5で控えたフォルダID
+     GOOGLE_DRIVE_CREDENTIALS_PATH=/Users/<ユーザー名>/python_projects/google-drive-rag/credentials.json
+
+   Gemini API を使う場合は、次の 1 行も追加する（STEP 6 の Gemini で作成したキー）。
+
+     GEMINI_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
+
+2. 注意点:
+   - GOOGLE_DRIVE_CREDENTIALS_PATH は「絶対パス」で書くこと。
+     MCP クライアントがサーバーを起動するときの作業ディレクトリは決まっていないため、
+     相対パスだとファイルが見つからないことがあります。
+   - 値をクォート（" "）で囲む必要はありません。= の前後にスペースを入れないこと。
+   - .env は .gitignore 登録済みです。Git にコミットしないこと。
+   - Google の公式 SDK（google-genai）は環境変数 GEMINI_API_KEY を自動で読み込みます。
+     GOOGLE_API_KEY も設定されていると、そちらが優先されるので注意。
+   - MCP クライアント側の設定（STEP 10 の -e / env）でも同じ環境変数を渡せます。
+     両方に書いた場合は、.env の値が優先されます（load_dotenv(override=True) のため）。
+
+
+--------------------------------------------------------------------------------
+STEP 9  資料を Markdown に変換して Drive にアップロード
+--------------------------------------------------------------------------------
+1. 質問の対象にしたい資料を、プロジェクトの data/ フォルダに入れる。
+   対応形式:
+     - Word (.docx)
+     - Excel (.xlsx)  ※すべてのシートが Markdown の表になる
+     - PowerPoint (.pptx)
+     - PDF (.pdf)  ※文字情報のある PDF のみ。スキャン画像だけの PDF は読めません
+     - テキストファイル (.txt)
+   対象はフォルダ直下のファイルのみ（サブフォルダの中身は変換されない）。
+   data/ には最初からサンプルの .docx が入っているので、そのまま試してもよい。
+   ※ フォルダを変えたい場合は、src/convert_to_markdown.py 先頭の INPUT_DIR（変換元）と
+     MARKDOWN_DIR（保存先）、src/upload_to_drive.py 先頭の MARKDOWN_DIR を書き換える。
+2. Markdown に変換する（保存先の markdown/ フォルダは自動で作成される）。
+     uv run python src/convert_to_markdown.py
+   「変換成功: サンプル_FAQ.docx -> markdown/サンプル_FAQ_docx.md」のように表示されれば OK。
+   ※ 出力ファイル名は「元のファイル名_拡張子.md」（例: 料金表.xlsx → 料金表_xlsx.md）。
+3. 変換結果を Drive にアップロードする。
+     uv run python src/upload_to_drive.py
+   - ブラウザが開くので、Google アカウントで認証する（手順は STEP 11-2 と同じ）。
+   - アップロード先は .env の GOOGLE_DRIVE_FOLDER_ID のフォルダ。
+   - 同じ名前のファイルが既にあれば内容を更新し、なければ新しく作成する。
+     資料を修正したら、2〜3 をもう一度実行すればよい。
+4. Drive のフォルダを開き、.md ファイルがアップロードされていることを確認する。
+
+
+--------------------------------------------------------------------------------
+STEP 10 MCP クライアントへの登録
+--------------------------------------------------------------------------------
+どちらか使う方を設定してください。<ユーザー名> は自分の環境に置き換えること。
+
+■ A. Claude Code の場合
+  ターミナルで以下を実行する（1 行で入力）。
+
+    claude mcp add google-drive-rag -- uv run --directory /Users/<ユーザー名>/python_projects/google-drive-rag python src/google_drive_rag_mcp_server.py
+
+  確認:
+    claude mcp list
+  （google-drive-rag が Connected と表示されれば OK）
+
+■ B. Claude Desktop の場合
+  1. 設定ファイルを開く（無ければ作成する）。
+       ~/Library/Application Support/Claude/claude_desktop_config.json
+  2. 以下を記入する（既に mcpServers がある場合は、その中に "google-drive-rag" を追加）。
+
+    {
+      "mcpServers": {
+        "google-drive-rag": {
+          "command": "/opt/homebrew/bin/uv",
+          "args": [
+            "run",
+            "--directory",
+            "/Users/<ユーザー名>/python_projects/google-drive-rag",
+            "python",
+            "src/google_drive_rag_mcp_server.py"
+          ]
+        }
+      }
+    }
+
+     ※ "command" は uv の絶対パスにする（Claude Desktop は PATH を引き継がないことがあるため）。
+        uv のパスはターミナルで  which uv  を実行して確認する。
+  3. Claude Desktop を完全に終了して（⌘Q）、再起動する。
+  4. 設定画面の「開発者」または「コネクタ」に google-drive-rag が表示され、
+     ツール（ask_question）が使えることを確認する。
+
+
+--------------------------------------------------------------------------------
+STEP 11 動作確認
+--------------------------------------------------------------------------------
+1. MCP クライアントで、アップロードした資料について質問する。
+     「TaskFlow 技術仕様書（資料の内容）について教えて」  （ask_question が呼ばれる）
+     例: data/ のサンプルを使った場合 「ビジネスプランの月額は？」
+2. 初回はブラウザが自動で開き、Google のログイン画面が表示される。
+   - STEP 3-7 でテストユーザーに追加したアカウントを選ぶ。
+   - 「このアプリは Google で確認されていません」と表示されたら、
+     「詳細」→「（アプリ名）（安全ではないページ）に移動」をクリックする。
+     （自分で作ったテスト中のアプリなので問題ありません）
+   - アクセス権限の確認画面で「続行」/「許可」をクリックする。
+   - 「The authentication flow has completed.」と表示されたらブラウザを閉じてよい。
+   ※ ブラウザで認証を終えるまでツールは応答を待ちます。速やかに完了させること。
+3. 初回はインデックス作成のため数秒〜数十秒かかる。回答の末尾に「参照元」が表示されれば成功。
+
+■ 運用上の注意
+  - 認証情報は保存しない設計のため、サーバーが再起動されるたび（クライアント再起動時など）に
+    STEP 11-2 のブラウザ認証が再度必要です。upload_to_drive.py も実行のたびに認証します。
+  - インデックスはサーバー起動中にメモリ上で保持されます。STEP 9 で資料を
+    追加・更新した場合は、MCP クライアントを再起動（サーバーを再起動）すると反映されます。
+
+
+--------------------------------------------------------------------------------
+付録 A  トラブルシューティング
+--------------------------------------------------------------------------------
+症状: 「環境変数 GOOGLE_DRIVE_CREDENTIALS_PATH が設定されていません」等のエラー
+  → .env の場所（プロジェクト直下か）、変数名のスペルを確認する。
+
+症状: FileNotFoundError: credentials.json
+  → GOOGLE_DRIVE_CREDENTIALS_PATH が絶対パスか、ファイル名が正しいかを確認する。
+
+症状: 認証画面で「エラー 403: access_denied」「アプリはテスト中です」
+  → STEP 3-7 のテストユーザーに、ログインしたアカウントが追加されているか確認する。
+
+症状: 認証画面で「redirect_uri_mismatch」
+  → STEP 4-3 でアプリケーションの種類が「デスクトップ アプリ」になっているか確認する。
+    違う場合は作り直して credentials.json を差し替える。
+
+症状: HttpError 403「Google Drive API has not been used in project ... or it is disabled」
+  → STEP 2 で Drive API を有効化したか、正しいプロジェクトで有効化したか確認する。
+    有効化直後は反映に数分かかることがある。
+
+症状: HttpError 404「File not found」/ ファイル一覧が空
+  → フォルダ ID が正しいか（URL の ? 以降を含めていないか）、
+    認証したアカウントがそのフォルダにアクセスできるかを確認する。
+
+症状: 「フォルダ '...' に Markdown ファイル (.md) が見つかりませんでした」
+  → STEP 9 のアップロード先と、.env の GOOGLE_DRIVE_FOLDER_ID が同じフォルダか確認する。
+    サーバーのログ（stderr）に読み込んだファイル名が出力される。
+      - Claude Code:   claude --debug で起動するとログを確認できる
+      - Claude Desktop: ~/Library/Logs/Claude/mcp-server-google-drive-rag.log
+
+症状: OpenAI の 401 (invalid_api_key) / 429 (insufficient_quota)
+  → 401: OPENAI_API_KEY が正しいか確認する。
+    429: STEP 6-2 の支払い設定・残高を確認する。
+
+症状: Anthropic の 401 (authentication_error) / 400 (credit balance is too low)
+  → 401: ANTHROPIC_API_KEY が正しいか確認する。
+    400: STEP 6 の Anthropic のクレジット残高を確認する。
+
+症状: MCP クライアントにサーバーが表示されない / 接続に失敗する
+  → ターミナルで手動起動してエラーが出ないか確認する（正常なら入力待ちで止まる。Ctrl+C で終了）。
+      cd /Users/<ユーザー名>/python_projects/google-drive-rag
+      uv run python src/google_drive_rag_mcp_server.py
+
+
+--------------------------------------------------------------------------------
+付録 B  セキュリティ上の注意
+--------------------------------------------------------------------------------
+- credentials.json、.env（OpenAI / Anthropic / Gemini API キー）は秘密情報です。Git へのコミット、
+  チャットやメールへの貼り付け、共有フォルダへの配置をしないこと。
+- 万一漏洩した場合:
+    - OpenAI API キー: platform.openai.com の API keys で該当キーを削除（Revoke）し、再発行する。
+    - Anthropic API キー: platform.claude.com の API keys で該当キーを削除し、再発行する。
+    - Gemini API キー: aistudio.google.com の API Keys で該当キーを削除し、再発行する。
+    - credentials.json: Google Auth Platform →「クライアント」で該当クライアントを削除し、作り直す。
+- upload_to_drive.py には Drive 全体の読み書き権限（https://www.googleapis.com/auth/drive）を
+  付与します。手元で実行するコマンドなので、アップロードするフォルダを確認してから実行すること。
+  MCP サーバーの権限は読み取りのみ（drive.readonly）です。
+- 認証済みアプリへのアクセス許可を取り消したい場合は、
+  https://myaccount.google.com/permissions から該当アプリを削除する。
